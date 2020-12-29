@@ -22,7 +22,7 @@
 #include <event.h>
 #include <signal.h>
 
-#include "workqueue.h"
+#include "thread.h"
 
 /* Port to listen on. */
 #define SERVER_PORT 12345
@@ -48,9 +48,6 @@ typedef struct client {
 	/* The client's socket. */
 	int fd;
 
-	/* The event_base for this client. */
-	struct event_base *evbase;
-
 	/* The bufferedevent for this client. */
 	struct bufferevent *buf_ev;
 
@@ -62,10 +59,6 @@ typedef struct client {
 } client_t;
 
 static struct event_base *evbase_accept;
-static workqueue_t workqueue;
-
-/* Signal handler function (defined below). */
-static void sighandler(int signal);
 
 /**
  * Set a socket to non-blocking mode.
@@ -96,10 +89,6 @@ static void closeAndFreeClient(client_t *client) {
 			bufferevent_free(client->buf_ev);
 			client->buf_ev = NULL;
 		}
-		if (client->evbase != NULL) {
-			event_base_free(client->evbase);
-			client->evbase = NULL;
-		}
 		if (client->output_buffer != NULL) {
 			evbuffer_free(client->output_buffer);
 			client->output_buffer = NULL;
@@ -108,6 +97,33 @@ static void closeAndFreeClient(client_t *client) {
 	}
 }
 
+static client_t* client_new(int client_fd) {
+	client_t* client;
+
+	/* Set the client socket to non-blocking mode. */
+	if (setnonblock(client_fd) < 0) {
+		warn("failed to set client socket to non-blocking");
+		close(client_fd);
+		return NULL;
+	}
+
+	/* Create a client object. */
+	if ((client = malloc(sizeof(*client))) == NULL) {
+		warn("failed to allocate memory for client state");
+		close(client_fd);
+		return NULL;
+	}
+	memset(client, 0, sizeof(*client));
+	client->fd = client_fd;
+
+	if ((client->output_buffer = evbuffer_new()) == NULL) {
+		warn("client output buffer allocation failed");
+		closeAndFreeClient(client);
+		return NULL;
+	}
+
+	return client;
+}
 
 /**
  * Called by libevent when there is data to read.
@@ -138,7 +154,7 @@ void buffered_on_read(struct bufferevent *bev, void *arg) {
 	 * Sending will occur asynchronously, handled by libevent. */
 	if (bufferevent_write_buffer(bev, client->output_buffer)) {
 		errorOut("Error sending data to client on fd %d\n", client->fd);
-		closeClient(client);
+		closeAndFreeClient(client);
 	}
 }
 
@@ -154,65 +170,11 @@ void buffered_on_write(struct bufferevent *bev, void *arg) {
  * descriptor.
  */
 void buffered_on_error(struct bufferevent *bev, short what, void *arg) {
-	closeClient((client_t *)arg);
+	closeAndFreeClient((client_t *)arg);
 }
 
-static void server_job_function(struct job *job) {
-	client_t *client = (client_t *)job->user_data;
-
-	event_base_dispatch(client->evbase);
-	closeAndFreeClient(client);
-	free(job);
-}
-
-/**
- * This function will be called by libevent when there is a connection
- * ready to be accepted.
- */
-void on_accept(int fd, short ev, void *arg) {
-	int client_fd;
-	struct sockaddr_in client_addr;
-	socklen_t client_len = sizeof(client_addr);
-	workqueue_t *workqueue = (workqueue_t *)arg;
-	client_t *client;
-	job_t *job;
-
-	client_fd = accept(fd, (struct sockaddr *)&client_addr, &client_len);
-	if (client_fd < 0) {
-		warn("accept failed");
-		return;
-	}
-
-	/* Set the client socket to non-blocking mode. */
-	if (setnonblock(client_fd) < 0) {
-		warn("failed to set client socket to non-blocking");
-		close(client_fd);
-		return;
-	}
-
-	/* Create a client object. */
-	if ((client = malloc(sizeof(*client))) == NULL) {
-		warn("failed to allocate memory for client state");
-		close(client_fd);
-		return;
-	}
-	memset(client, 0, sizeof(*client));
-	client->fd = client_fd;
-
-	/* Add any custom code anywhere from here to the end of this function
-	 * to initialize your application-specific attributes in the client struct. */
-
-	if ((client->output_buffer = evbuffer_new()) == NULL) {
-		warn("client output buffer allocation failed");
-		closeAndFreeClient(client);
-		return;
-	}
-
-	if ((client->evbase = event_base_new()) == NULL) {
-		warn("client event_base creation failed");
-		closeAndFreeClient(client);
-		return;
-	}
+/* Register the client on the event_base */
+void client_serve(client_t* client, struct event_base* evbase) {
 
 	/* Create the buffered event.
 	 *
@@ -237,35 +199,48 @@ void on_accept(int fd, short ev, void *arg) {
 	 * that will be passed to the callbacks.  We store the client
 	 * object here.
 	 */
-	if ((client->buf_ev = bufferevent_new(client_fd, buffered_on_read, buffered_on_write, buffered_on_error, client)) == NULL) {
+	if ((client->buf_ev = bufferevent_new(client->fd,
+	                                      buffered_on_read,
+	                                      buffered_on_write,
+	                                      buffered_on_error,
+	                                      client)) == NULL) {
 		warn("client bufferevent creation failed");
 		closeAndFreeClient(client);
 		return;
 	}
-	bufferevent_base_set(client->evbase, client->buf_ev);
 
-	bufferevent_settimeout(client->buf_ev, SOCKET_READ_TIMEOUT_SECONDS, SOCKET_WRITE_TIMEOUT_SECONDS);
+	bufferevent_base_set(evbase, client->buf_ev);
+
+	bufferevent_settimeout(client->buf_ev,
+	                       SOCKET_READ_TIMEOUT_SECONDS,
+	                       SOCKET_WRITE_TIMEOUT_SECONDS);
 
 	/* We have to enable it before our callbacks will be
 	 * called. */
 	bufferevent_enable(client->buf_ev, EV_READ);
-
-	/* Create a job object and add it to the work queue. */
-	if ((job = malloc(sizeof(*job))) == NULL) {
-		warn("failed to allocate memory for job state");
-		closeAndFreeClient(client);
-		return;
-	}
-	job->job_function = server_job_function;
-	job->user_data = client;
-
-	workqueue_add_job(workqueue, job);
 }
 
 /**
- * Run the server.  This function blocks, only returning when the server has terminated.
+ * This function will be called by libevent when there is a connection
+ * ready to be accepted.
  */
-int runServer(void) {
+void on_accept(int fd, short ev, void *arg) {
+	int client_fd;
+	client_t *client;
+
+	client_fd = accept(fd, NULL, NULL);
+	if (client_fd < 0) {
+		warn("accept failed");
+		return;
+	}
+
+	client = client_new(client_fd);
+	if (client) {
+		dispatch_new_client(client);
+	}
+}
+
+int main(int argc, char *argv[]) {
 	int listenfd;
 	struct sockaddr_in listen_addr;
 	struct event ev_accept;
@@ -274,34 +249,27 @@ int runServer(void) {
 	/* Initialize libevent. */
 	event_init();
 
-	/* Set signal handlers */
-	sigset_t sigset;
-	sigemptyset(&sigset);
-	struct sigaction siginfo = {
-		.sa_handler = sighandler,
-		.sa_mask = sigset,
-		.sa_flags = SA_RESTART,
-	};
-	sigaction(SIGINT, &siginfo, NULL);
-	sigaction(SIGTERM, &siginfo, NULL);
-
 	/* Create our listening socket. */
 	listenfd = socket(AF_INET, SOCK_STREAM, 0);
 	if (listenfd < 0) {
 		err(1, "listen failed");
 	}
 	memset(&listen_addr, 0, sizeof(listen_addr));
+
 	listen_addr.sin_family = AF_INET;
 	listen_addr.sin_addr.s_addr = INADDR_ANY;
 	listen_addr.sin_port = htons(SERVER_PORT);
+
+	reuseaddr_on = 1;
+	setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr_on, sizeof(reuseaddr_on));
+
 	if (bind(listenfd, (struct sockaddr *)&listen_addr, sizeof(listen_addr)) < 0) {
 		err(1, "bind failed");
 	}
+
 	if (listen(listenfd, CONNECTION_BACKLOG) < 0) {
 		err(1, "listen failed");
 	}
-	reuseaddr_on = 1;
-	setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr_on, sizeof(reuseaddr_on));
 
 	/* Set the socket to non-blocking, this is essential in event
 	 * based programming with libevent. */
@@ -315,17 +283,11 @@ int runServer(void) {
 		return 1;
 	}
 
-	/* Initialize work queue. */
-	if (workqueue_init(&workqueue, NUM_THREADS)) {
-		perror("Failed to create work queue");
-		close(listenfd);
-		workqueue_shutdown(&workqueue);
-		return 1;
-	}
+	thread_init(NUM_THREADS);
 
 	/* We now have a listening socket, we create a read event to
 	 * be notified when a client connects. */
-	event_set(&ev_accept, listenfd, EV_READ|EV_PERSIST, on_accept, (void *)&workqueue);
+	event_set(&ev_accept, listenfd, EV_READ|EV_PERSIST, on_accept, NULL);
 	event_base_set(evbase_accept, &ev_accept);
 	event_add(&ev_accept, NULL);
 
@@ -342,28 +304,4 @@ int runServer(void) {
 	printf("Server shutdown.\n");
 
 	return 0;
-}
-
-/**
- * Kill the server.  This function can be called from another thread to kill the
- * server, causing runServer() to return.
- */
-void killServer(void) {
-	fprintf(stdout, "Stopping socket listener event loop.\n");
-	if (event_base_loopexit(evbase_accept, NULL)) {
-		perror("Error shutting down server");
-	}
-	fprintf(stdout, "Stopping workers.\n");
-	workqueue_shutdown(&workqueue);
-}
-
-static void sighandler(int signal) {
-	fprintf(stdout, "Received signal %d: %s.  Shutting down.\n", signal, strsignal(signal));
-	killServer();
-}
-
-/* Main function for demonstrating the echo server.
- * You can remove this and simply call runServer() from your application. */
-int main(int argc, char *argv[]) {
-	return runServer();
 }
