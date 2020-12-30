@@ -1,4 +1,4 @@
-# Multithreaded, libevent-based socket server based on code from Ronald Bennett Cemer and memcached.
+# Multithreaded, libevent socket server based on code from Ronald Bennett Cemer and memcached.
 
 This software is licensed under the BSD license.
 See the accompanying LICENSE.txt for details.
