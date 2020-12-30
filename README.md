@@ -37,12 +37,13 @@ Some inspiration and coding ideas came from echoserver and cliserver, both of wh
 
 Echoserver is located here: http://ishbits.googlecode.com/svn/trunk/libevent-examples/echo-server/libevent_echosrv1.c
 Cliserver is located here: http://nitrogen.posterous.com/cliserver-an-example-libevent-based-socket-se
+
 # Flaws of the original design and improvements
 
-The original design of assigning each connection its own event_base is multithreaded
+The original design of assigning each connection its own `event_base` is multithreaded
 but not in the way you would expect from a server.
 
-Calling event_base_dispatch per connection on a worker thread results in
+Calling `event_base_dispatch` per connection on a worker thread results in
 an event loop only handling events for __one__ file descriptor per worker thread.
 
 This means only N connections can be served in parallel where N is the amount of worker threads.
@@ -50,20 +51,20 @@ Clearly this is not how libevent or any event-loop is meant to be used.
 
 ## event_base and event_base_dispatch
 
-An event_base is an OS independent event-loop abtraction.
-Events can be registered on a event_base and their callbacks will be executed
-by the thread running the event_base's event loop by calling event_base_dispatch.
+An `event_base` is an OS independent event-loop abstraction.
+Events can be registered on an `event_base` and their callbacks will be executed
+by the thread running the event_base's event loop by calling `event_base_dispatch`.
 
 ## memcached's worker thread design
 
-To support multiple connections per worker all sockets are worker is responsible for
-must be added to its event_base.
-New connections are accepted by the main thread running its on event loop.
+To support multiple connections per worker all sockets for which a worker is responsible
+must be added to its `event_base`.
+New connections are accepted by the main thread running its own event loop.
 Sockets created in the `on_accept` callback are dispatched round-robin to
 the worker threads.
 Each worker thread has a pipe through which new connection can be passed.
 When a worker thread receives a event for its new connection pipe it will
-pop a new item from the item queue and register the client on its event_base.
+pop a new item from the item queue and register the popped client on its `event_base`.
 
 Therefore connections are spread somewhat evenly among all worker thread
 which can handle an arbitrary amount of connections at once.
