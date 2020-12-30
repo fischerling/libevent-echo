@@ -17,10 +17,12 @@
 
 #include "thread.h"
 
-#define ITEMS_PER_ALLOC 64
-
 typedef struct client client_t;
 
+/*
+ * Each libevent instance has a wakeup pipe, which other threads
+ * can use to signal that they've put a new connection on its queue.
+ */
 typedef struct {                                                                
     pthread_t thread_id;        /* unique ID of this thread */                  
     struct event_base *base;    /* libevent handle this thread uses */          
@@ -43,14 +45,7 @@ typedef struct conn_queue {
     pthread_mutex_t lock;
 } CQ;
 
-/* Free list of CQ_ITEM structs */
-static CQ_ITEM *cqi_freelist;
-static pthread_mutex_t cqi_freelist_lock;
-
-/*
- * Each libevent instance has a wakeup pipe, which other threads
- * can use to signal that they've put a new connection on its queue.
- */
+/* worker threads */
 static LIBEVENT_THREAD *threads;
 static int NTHREADS;
 
@@ -123,53 +118,22 @@ static void cq_push(CQ *cq, CQ_ITEM *item) {
 
 /*
  * Returns a fresh connection queue item.
+ *
+ * We do not cache and bulk allocate queue items our self
+ * because modern allocators should do this better than we could.
  */
 static CQ_ITEM *cqi_new(void) {
     CQ_ITEM *item = NULL;
-    pthread_mutex_lock(&cqi_freelist_lock);
-    if (cqi_freelist) {
-        item = cqi_freelist;
-        cqi_freelist = item->next;
-    }
-    pthread_mutex_unlock(&cqi_freelist_lock);
-
-    if (NULL == item) {
-        int i;
-
-        /* Allocate a bunch of items at once to reduce fragmentation */
-        item = malloc(sizeof(CQ_ITEM) * ITEMS_PER_ALLOC);
-        if (NULL == item) {
-            return NULL;
-        }
-
-        /*
-         * Link together all the new items except the first one
-         * (which we'll return to the caller) for placement on
-         * the freelist.
-         */
-        for (i = 2; i < ITEMS_PER_ALLOC; i++)
-            item[i - 1].next = &item[i];
-
-        pthread_mutex_lock(&cqi_freelist_lock);
-        item[ITEMS_PER_ALLOC - 1].next = cqi_freelist;
-        cqi_freelist = &item[1];
-        pthread_mutex_unlock(&cqi_freelist_lock);
-    }
-
+    item = malloc(sizeof(CQ_ITEM));
     return item;
 }
 
-
 /*
- * Frees a connection queue item (adds it to the freelist.)
+ * Frees a connection queue item
  */
 static void cqi_free(CQ_ITEM *item) {
-    pthread_mutex_lock(&cqi_freelist_lock);
-    item->next = cqi_freelist;
-    cqi_freelist = item;
-    pthread_mutex_unlock(&cqi_freelist_lock);
+	free(item);
 }
-
 
 /*
  * Creates a worker thread.
@@ -310,9 +274,6 @@ void thread_init(int nthreads) {
 
     pthread_mutex_init(&init_lock, NULL);
     pthread_cond_init(&init_cond, NULL);
-
-    pthread_mutex_init(&cqi_freelist_lock, NULL);
-    cqi_freelist = NULL;
 
     threads = calloc(nthreads, sizeof(LIBEVENT_THREAD));
     if (! threads) {
