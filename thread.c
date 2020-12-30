@@ -1,6 +1,10 @@
 /* -*- Mode: C; tab-width: 4; c-basic-offset: 4; indent-tabs-mode: nil -*- */
-/*
+/* Copyright (c) 2003, Danga Interactive, Inc.
+ * Copyright (c) 2020, Florian Fischer
+ *
  * Thread management for memcached.
+ * All fancy business like pausing, stopping threads was removed
+ * and only the essential parts for a scalable multi threaded server are kept
  */
 #include <assert.h>
 #include <stdio.h>

@@ -1,11 +1,9 @@
 /**
  * Multithreaded, libevent-based socket server.
  * Copyright (c) 2012 Ronald Bennett Cemer
+ * Copyright (c) 2020 Florian Fischer
  * This software is licensed under the BSD license.
  * See the accompanying LICENSE.txt for details.
- *
- * To compile: gcc -o echoserver_threaded echoserver_threaded.c workqueue.c -levent -lpthread
- * To run: ./echoserver_threaded
  */
 
 #include <sys/types.h>
