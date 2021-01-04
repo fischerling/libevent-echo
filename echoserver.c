@@ -8,6 +8,7 @@
 
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/sysinfo.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <stdlib.h>
@@ -29,8 +30,8 @@
 /* Socket read and write timeouts, in seconds. */
 #define SOCKET_READ_TIMEOUT_SECONDS 10
 #define SOCKET_WRITE_TIMEOUT_SECONDS 10
-/* Number of worker threads.  Should match number of CPU cores reported in /proc/cpuinfo. */
-#define NUM_THREADS 4
+/* Number of worker threads. -1 will start N threads where N is number of available CPUs */
+#define NUM_THREADS -1
 
 /* Behaves similarly to fprintf(stderr, ...), but adds file, line, and function
  information. */
@@ -281,7 +282,13 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-	thread_init(NUM_THREADS);
+	unsigned nthreads;
+	if (NUM_THREADS == -1) {
+		nthreads = get_nprocs();
+	} else {
+		nthreads = NUM_THREADS;
+	}
+	thread_init(nthreads);
 
 	/* We now have a listening socket, we create a read event to
 	 * be notified when a client connects. */
@@ -289,7 +296,7 @@ int main(int argc, char *argv[]) {
 	event_base_set(evbase_accept, &ev_accept);
 	event_add(&ev_accept, NULL);
 
-	printf("Server listening on %d.\n", SERVER_PORT);
+	printf("Server listening on %d. Using %d worker threads\n", SERVER_PORT, nthreads);
 
 	/* Start the event loop. */
 	event_base_dispatch(evbase_accept);
