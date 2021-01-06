@@ -52,9 +52,6 @@ typedef struct client {
 	/* The bufferedevent for this client. */
 	struct bufferevent *buf_ev;
 
-	/* The output buffer for this client. */
-	struct evbuffer *output_buffer;
-
 	/* Here you can add your own application-specific attributes which
 	 * are connection-specific. */
 } client_t;
@@ -90,10 +87,6 @@ static void closeAndFreeClient(client_t *client) {
 			bufferevent_free(client->buf_ev);
 			client->buf_ev = NULL;
 		}
-		if (client->output_buffer != NULL) {
-			evbuffer_free(client->output_buffer);
-			client->output_buffer = NULL;
-		}
 		free(client);
 	}
 }
@@ -117,12 +110,6 @@ static client_t* client_new(int client_fd) {
 	memset(client, 0, sizeof(*client));
 	client->fd = client_fd;
 
-	if ((client->output_buffer = evbuffer_new()) == NULL) {
-		warn("client output buffer allocation failed");
-		closeAndFreeClient(client);
-		return NULL;
-	}
-
 	return client;
 }
 
@@ -139,17 +126,12 @@ void buffered_on_read(struct bufferevent *bev, void *arg) {
 		exit(EXIT_SUCCESS);
 	}
 
-	int err = evbuffer_add_buffer(bev->input, bev->output);
+	/* Copy input from the client socket to the output.
+	 * The output buffer of an bufferevent will be drained asynchronously
+	 * by libevent. */
+	int err = bufferevent_write_buffer(bev, bev->input);
 	if (unlikely(err)) {
 		errorOut("Error copying input to output on fd %d\n", client->fd);
-	}
-
-	/* Send the results to the client.  This actually only queues the results for sending.
-	 * Sending will occur asynchronously, handled by libevent. */
-	err = bufferevent_write_buffer(bev, client->output_buffer);
-	if (unlikely(err)) {
-		errorOut("Error sending data to client on fd %d\n", client->fd);
-		closeAndFreeClient(client);
 	}
 }
 

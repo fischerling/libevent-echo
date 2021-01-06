@@ -49,6 +49,22 @@ an event loop only handling events for __one__ file descriptor per worker thread
 This means only N connections can be served in parallel where N is the amount of worker threads.
 Clearly this is not how libevent or any event-loop is meant to be used.
 
+Not only the design is not optimal also the code contains some nonsense.
+The `evbuffer output_buffer` contained in the client struct and used in `buffered_on_read`
+function in the original version is never written to.
+The original code claims in a comment that the call `bufferevent_write_buffer(bev, client->output_buffer)`
+will queue our output to be send through libevent but this is plainly wrong.
+
+First of all the `bufferevent_write_buffer` function call will copy all bytes from
+the seconds argument to the output buffer of the first
+according to the [libevent documentation](ihttps://www.seul.org/~nickm/libevent-book/Ref6_bufferevent.html).
+So `output_buffer` is never written to instead it is read from and therefore can
+t cause sending data to the client socket.
+
+Secondly this evbuffer is never connected or registered for anything and it will always
+contain 0 bytes. This is easily verifiable by inserting a
+`printf("output_bufferbytes %ld\n", evbuffer_get_length(client->output_buffer));`.
+
 ## event_base and event_base_dispatch
 
 An `event_base` is an OS independent event-loop abstraction.
