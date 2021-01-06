@@ -40,6 +40,8 @@
 	fprintf(stderr, __VA_ARGS__);\
 }
 
+#define unlikely(x) __builtin_expect(!!(x), 0)
+
 /**
  * Struct to carry around connection (client)-specific data.
  */
@@ -129,29 +131,23 @@ static client_t* client_new(int client_fd) {
  */
 void buffered_on_read(struct bufferevent *bev, void *arg) {
 	client_t *client = (client_t *)arg;
-	char data[4096];
-	int nbytes;
+	struct evbuffer_ptr p;
+	evbuffer_ptr_set(bev->input, &p, 0, EVBUFFER_PTR_SET);
 
-	/* Copy the data from the input buffer to the output buffer in 4096-byte chunks.
-	 * There is a one-liner to do the whole thing in one shot, but the purpose of this server
-	 * is to show actual real-world reading and writing of the input and output buffers,
-	 * so we won't take that shortcut here. */
-	while ((nbytes = EVBUFFER_LENGTH(bev->input)) > 0) {
-		/* Remove a chunk of data from the input buffer, copying it into our local array (data). */
-		if (nbytes > 4096) nbytes = 4096;
-		evbuffer_remove(bev->input, data, nbytes); 
+	p = evbuffer_search(bev->input, "quit\n", 5, &p);
+	if (p.pos != -1) {
+		exit(EXIT_SUCCESS);
+	}
 
-		if (nbytes == 5 && (strncmp(data, "quit\n", 5) == 0)) {
-			exit(0);
-		}
-
-		/* Add the chunk of data from our local array (data) to the client's output buffer. */
-		evbuffer_add(client->output_buffer, data, nbytes);
+	int err = evbuffer_add_buffer(bev->input, bev->output);
+	if (unlikely(err)) {
+		errorOut("Error copying input to output on fd %d\n", client->fd);
 	}
 
 	/* Send the results to the client.  This actually only queues the results for sending.
 	 * Sending will occur asynchronously, handled by libevent. */
-	if (bufferevent_write_buffer(bev, client->output_buffer)) {
+	err = bufferevent_write_buffer(bev, client->output_buffer);
+	if (unlikely(err)) {
 		errorOut("Error sending data to client on fd %d\n", client->fd);
 		closeAndFreeClient(client);
 	}
