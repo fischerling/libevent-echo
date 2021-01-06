@@ -1,5 +1,5 @@
 CC ?=gcc
-CFLAGS ?=-Wall
+CFLAGS ?=-Wall -O3
 LDFLAGS ?=-levent -pthread
 
 all: echoserver
