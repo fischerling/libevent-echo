@@ -26,7 +26,7 @@
 /* Port to listen on. */
 #define SERVER_PORT 12345
 /* Connection backlog (# of backlogged connections to accept). */
-#define CONNECTION_BACKLOG 8
+#define CONNECTION_BACKLOG 10240
 /* Socket read and write timeouts, in seconds. */
 #define SOCKET_READ_TIMEOUT_SECONDS 10
 #define SOCKET_WRITE_TIMEOUT_SECONDS 10
