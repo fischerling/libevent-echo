@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/sysinfo.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <stdlib.h>
@@ -219,28 +220,33 @@ void on_accept(int fd, short ev, void *arg) {
 
 int main(int argc, char *argv[]) {
 	int listenfd;
-	struct sockaddr_in listen_addr;
+	struct addrinfo* servaddr;
 	struct event ev_accept;
 	int reuseaddr_on;
 
 	/* Initialize libevent. */
 	event_init();
 
+	int error = getaddrinfo("::", "SERVER_PORT", NULL, &servaddr);
+	if (error) {
+		if (error == EAI_SYSTEM) {
+			err(EXIT_FAILURE, "getaddrinfo failed");
+		} else {                                                                    
+			fprintf(stderr, "error in getaddrinfo: %s", gai_strerror(error));
+			exit(EXIT_FAILURE);
+		}                                                                           
+	}   
+
 	/* Create our listening socket. */
-	listenfd = socket(AF_INET, SOCK_STREAM, 0);
+	listenfd = socket(servaddr->ai_family, servaddr->ai_socktype, servaddr->ai_protocol);
 	if (listenfd < 0) {
 		err(1, "listen failed");
 	}
-	memset(&listen_addr, 0, sizeof(listen_addr));
-
-	listen_addr.sin_family = AF_INET;
-	listen_addr.sin_addr.s_addr = INADDR_ANY;
-	listen_addr.sin_port = htons(SERVER_PORT);
 
 	reuseaddr_on = 1;
 	setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr_on, sizeof(reuseaddr_on));
 
-	if (bind(listenfd, (struct sockaddr *)&listen_addr, sizeof(listen_addr)) < 0) {
+	if (bind(listenfd, servaddr->ai_addr, servaddr->ai_addrlen) < 0) {
 		err(1, "bind failed");
 	}
 
