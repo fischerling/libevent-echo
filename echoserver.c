@@ -41,6 +41,9 @@
 	fprintf(stderr, __VA_ARGS__);\
 }
 
+#define xstr(a) str(a)
+#define str(a) #a
+
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
 /**
@@ -227,7 +230,7 @@ int main(int argc, char *argv[]) {
 	/* Initialize libevent. */
 	event_init();
 
-	int error = getaddrinfo("::", "SERVER_PORT", NULL, &servaddr);
+	int error = getaddrinfo("::", xstr(SERVER_PORT), NULL, &servaddr);
 	if (error) {
 		if (error == EAI_SYSTEM) {
 			err(EXIT_FAILURE, "getaddrinfo failed");
